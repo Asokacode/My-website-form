@@ -26,6 +26,7 @@
 
     <label>Email</label>
     <input type="email" name="email" required>
+    <span id="emailError" style="color: red; font-size: 13px; display: none;">Please enter a valid email address.</span>
 
     <label>Message</label>
     <textarea name="message" rows="4" required></textarea>
@@ -39,14 +40,30 @@
     const form = document.getElementById("myForm");
     const status = document.getElementById("status");
 
+    function isValidEmail(email) {
+      const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      return regex.test(email);
+    }
+    
     form.addEventListener("submit", (e) => {
       e.preventDefault();
+      
+      const emailError = document.getElementById("emailError");
+      const emailValue = form.email.value.trim();
+      
+      if (!isValidEmail(emailValue)) {
+        emailError.style.display = "block";
+        form.email.focus();
+        return; // stop here, don't submit
+      } else {
+        emailError.style.display = "none";
+      }
 
-      const data = {
-        name: form.name.value,
-        email: form.email.value,
-        message: form.message.value
-      };
+  const data = {
+    name: form.name.value,
+    email: emailValue,
+    message: form.message.value
+  };
 
       status.textContent = "Sending...";
 
