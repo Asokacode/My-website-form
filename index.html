@@ -175,8 +175,16 @@
       .then(() => setCloudStatus('☁︎ Tersimpan ke cloud ✓', true))
       .catch(err => {
         console.error(err);
-        setCloudStatus('☁︎ Gagal simpan (periksa koneksi/konfigurasi)', false);
+        setCloudStatus(`☁︎ Gagal: ${err.code || ''} ${err.message || err}`, false);
       });
+
+    // kalau tergantung lebih 8 saat tanpa jawapan (berjaya/gagal), tunjuk amaran timeout
+    setTimeout(() => {
+      const elStatus = document.getElementById('cloudStatus');
+      if (elStatus.textContent.includes('Menyimpan')) {
+        setCloudStatus('☁︎ Tergantung >8s — kemungkinan disekat rangkaian/firewall', false);
+      }
+    }, 8000);
   }
 
   function scheduleSave() {
