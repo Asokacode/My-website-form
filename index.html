@@ -6,6 +6,8 @@
 <title>Papan Skor Pickleball Ganda</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
   body { font-family: 'Segoe UI', system-ui, sans-serif; }
   .serve-dot {
@@ -75,7 +77,8 @@
     </div>
 
     <!-- Status pertandingan -->
-    <div id="statusLine" class="text-center text-sm font-mono text-emerald-700 mb-6 min-h-[20px]"></div>
+    <div id="statusLine" class="text-center text-sm font-mono text-emerald-700 mb-1 min-h-[20px]"></div>
+    <div id="cloudStatus" class="text-center text-xs font-mono text-slate-400 mb-6 min-h-[16px]"></div>
 
     <!-- Kontrol -->
     <div class="flex flex-col sm:flex-row gap-3 justify-center">
@@ -85,6 +88,9 @@
       <button onclick="downloadPDF()" class="px-5 py-3 rounded-xl bg-emerald-700 text-white font-semibold text-sm hover:bg-emerald-800 active:scale-95 transition shadow">
         ⬇ Download PDF
       </button>
+      <button onclick="openHistory()" class="px-5 py-3 rounded-xl border-2 border-emerald-300 text-emerald-700 font-semibold text-sm hover:bg-emerald-100 active:scale-95 transition">
+        📜 Riwayat
+      </button>
     </div>
 
     <p class="text-center text-xs text-slate-400 mt-6">
@@ -92,7 +98,146 @@
     </p>
   </div>
 
+  <!-- Modal Riwayat -->
+  <div id="historyOverlay" class="fixed inset-0 bg-black/50 hidden items-center justify-center p-4 z-50">
+    <div class="bg-white rounded-2xl p-5 w-full max-w-md max-h-[80vh] overflow-y-auto relative">
+      <button onclick="closeHistory()" class="absolute top-3 right-3 text-slate-400 hover:text-slate-700 text-lg">✕</button>
+      <h2 class="text-base font-bold text-emerald-900 mb-3">📜 Riwayat Pertandingan</h2>
+      <div id="historyList" class="space-y-2 text-sm">
+        <p class="text-slate-400">Memuat...</p>
+      </div>
+    </div>
+  </div>
+
 <script>
+  // ============================================================
+  // KONFIGURASI FIREBASE
+  // Ganti nilai di bawah dengan config projek Firebase anda sendiri.
+  // Firebase Console → Project Settings → General → Your apps → SDK setup and configuration
+  // ============================================================
+  const firebaseConfig = {
+    apiKey: "AIzaSyCqLRK7iIozFfF-xys8myrMT2O_7nndtSk",
+    authDomain: "scoreboard-c22213.firebaseapp.com",
+    projectId: "scoreboard-c22213",
+    storageBucket: "scoreboard-c22213.firebasestorage.app",
+    messagingSenderId: "1043919406510",
+    appId: "1:1043919406510:web:df518490fd1a3dd7e6743f"
+  };
+
+  let db = null;
+  let firebaseReady = false;
+  try {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    firebaseReady = true;
+  } catch (e) {
+    console.warn('Firebase belum dikonfigurasi:', e);
+  }
+
+  const MATCH_COLLECTION = 'pickleball_matches';
+
+  function getOrCreateMatchId() {
+    let id = localStorage.getItem('currentMatchId');
+    if (!id) {
+      id = 'match_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      localStorage.setItem('currentMatchId', id);
+    }
+    return id;
+  }
+  let currentMatchId = getOrCreateMatchId();
+
+  function setCloudStatus(text, ok) {
+    const elStatus = document.getElementById('cloudStatus');
+    elStatus.textContent = text;
+    elStatus.className = 'text-center text-xs font-mono mb-6 min-h-[16px] ' + (ok === false ? 'text-red-400' : ok === true ? 'text-emerald-500' : 'text-slate-400');
+  }
+
+  let saveTimer = null;
+  function saveToFirebase() {
+    if (!firebaseReady) {
+      setCloudStatus('☁︎ Firebase belum dikonfigurasi — lihat komen di kode', false);
+      return;
+    }
+    setCloudStatus('☁︎ Menyimpan...', null);
+    const winner = getWinner();
+    const payload = {
+      team1Names: [el.playerA.value || 'Player A', el.playerB.value || 'Player B'],
+      team2Names: [el.playerC.value || 'Player C', el.playerD.value || 'Player D'],
+      team1Score: state.team1.score,
+      team2Score: state.team2.score,
+      serving: state.serving,
+      serverNum: state.serverNum,
+      status: winner ? 'selesai' : 'berlangsung',
+      winnerTeam: winner || null,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    };
+    db.collection(MATCH_COLLECTION).doc(currentMatchId).set(payload, { merge: true })
+      .then(() => setCloudStatus('☁︎ Tersimpan ke cloud ✓', true))
+      .catch(err => {
+        console.error(err);
+        setCloudStatus('☁︎ Gagal simpan (periksa koneksi/konfigurasi)', false);
+      });
+  }
+
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveToFirebase, 500);
+  }
+
+  function openHistory() {
+    document.getElementById('historyOverlay').classList.remove('hidden');
+    document.getElementById('historyOverlay').classList.add('flex');
+    loadHistory();
+  }
+  function closeHistory() {
+    document.getElementById('historyOverlay').classList.add('hidden');
+    document.getElementById('historyOverlay').classList.remove('flex');
+  }
+
+  function loadHistory() {
+    const listEl = document.getElementById('historyList');
+    if (!firebaseReady) {
+      listEl.innerHTML = '<p class="text-red-400">Firebase belum dikonfigurasi. Isi firebaseConfig di kode terlebih dahulu.</p>';
+      return;
+    }
+    listEl.innerHTML = '<p class="text-slate-400">Memuat...</p>';
+    db.collection(MATCH_COLLECTION).orderBy('updatedAt', 'desc').limit(15).get()
+      .then(snap => {
+        if (snap.empty) {
+          listEl.innerHTML = '<p class="text-slate-400">Belum ada rekod pertandingan.</p>';
+          return;
+        }
+        listEl.innerHTML = '';
+        snap.forEach(doc => {
+          const d = doc.data();
+          const t1 = (d.team1Names || []).join(' & ');
+          const t2 = (d.team2Names || []).join(' & ');
+          const tgl = d.updatedAt ? d.updatedAt.toDate().toLocaleString('id-ID') : '-';
+          const badge = d.status === 'selesai'
+            ? `<span class="text-emerald-600 font-semibold">Selesai</span>`
+            : `<span class="text-orange-500 font-semibold">Berlangsung</span>`;
+          const row = document.createElement('div');
+          row.className = 'border border-slate-100 rounded-xl p-3';
+          row.innerHTML = `
+            <div class="flex justify-between items-start">
+              <div>
+                <p class="font-semibold text-slate-700">${t1} <span class="text-slate-400">vs</span> ${t2}</p>
+                <p class="text-slate-400 text-xs">${tgl}</p>
+              </div>
+              <div class="text-right">
+                <p class="font-black text-lg text-emerald-700">${d.team1Score ?? 0} - ${d.team2Score ?? 0}</p>
+                ${badge}
+              </div>
+            </div>`;
+          listEl.appendChild(row);
+        });
+      })
+      .catch(err => {
+        console.error(err);
+        listEl.innerHTML = '<p class="text-red-400">Gagal memuat riwayat. Periksa konfigurasi Firebase & aturan keamanan Firestore.</p>';
+      });
+  }
+
   // ---- STATE ----
   const WIN_SCORE = 11;
   const WIN_BY = 2;
@@ -165,12 +310,16 @@
       state[team].score += 1;
     }
     render();
+    scheduleSave();
   }
 
   function resetGame() {
-    if (!confirm('Reset skor pertandingan ke 0-0?')) return;
+    if (!confirm('Reset skor pertandingan ke 0-0? Pertandingan sekarang akan disimpan sebagai rekod baru.')) return;
     state = { team1: { score: 0 }, team2: { score: 0 }, serving: 'team1', serverNum: 2, firstSequence: true };
+    currentMatchId = 'match_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem('currentMatchId', currentMatchId);
     render();
+    scheduleSave();
   }
 
   function render() {
@@ -265,9 +414,15 @@
   // re-render label saat nama pemain diubah
   [el.playerA, el.playerB, el.playerC, el.playerD].forEach(inp => {
     inp.addEventListener('input', render);
+    inp.addEventListener('change', scheduleSave);
   });
 
   render();
+  if (firebaseReady) {
+    setCloudStatus('☁︎ Tersambung ke Firebase', true);
+  } else {
+    setCloudStatus('☁︎ Firebase belum dikonfigurasi', false);
+  }
 </script>
 </body>
 </html>
